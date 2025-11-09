@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+azure-data-tables
+azure-servicebus
+pyjwt
