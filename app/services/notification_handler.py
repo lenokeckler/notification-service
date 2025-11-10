@@ -1,7 +1,7 @@
 # app/services/notification_handler.py
 from datetime import datetime
 import uuid
-import json  # <-- importante
+import json 
 
 from app.infra.table_client import insert_notification
 from app.services.websocket_manager import ws_manager
@@ -32,6 +32,9 @@ async def process_notification(msg: dict):
     elif noti_type == "NEW_MESSAGE":
         title = "Nuevo mensaje"
         message = "Tienes un nuevo mensaje."
+    elif noti_type == "WORD_FORGOTTEN":
+        title = "Palabra olvidada"
+        message = "Quitaste una palabra de tu diccionario."
     else:
         title = "Notificación"
         message = "Tienes una nueva notificación."
@@ -39,7 +42,6 @@ async def process_notification(msg: dict):
     row_key = str(uuid.uuid4())
     created_at = datetime.utcnow().isoformat()
 
-    # 👇 Azure Table NO acepta dicts directos.
     # Si 'data' es dict, lo pasamos a JSON.
     if isinstance(data, dict):
         data_to_store = json.dumps(data)
@@ -59,12 +61,12 @@ async def process_notification(msg: dict):
     }
     insert_notification(entity)
 
-    # 2. Enviar por WebSocket (si está conectado) → aquí sí podemos mandar el dict
+    # 2. Enviar por WebSocket (si está conectado) → podemos mandar el dict
     await ws_manager.send_to_user(user_id, {
         "id": row_key,
         "type": noti_type,
         "title": title,
         "message": message,
         "createdAt": created_at,
-        "data": data,   # <- aquí dejamos el dict original
+        "data": data,   #  dict original
     })
