@@ -5,11 +5,12 @@ from typing import Optional, Dict, Any
 
 from app.security.jwt_utils import get_current_user
 from app.infra.table_client import (
-    insert_notification,   # por si luego exponemos un POST real
+    insert_notification,   # reservado por si luego expones un POST real
     get_user_notifications,
     mark_as_read,
 )
 from app.services.notification_handler import process_notification
+from app.infra.servicebus_consumer import consumer_status  # 🔍 diagnóstico consumer
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -26,7 +27,6 @@ async def list_user_notifications(user_id: str, request: Request):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     notis = get_user_notifications(user_id)
-    # Azure ya nos da una lista de dicts, la mandamos tal cual
     return notis
 
 
@@ -65,8 +65,6 @@ async def mark_notification_as_read(notification_id: str, request: Request):
     try:
         mark_as_read(user_id, notification_id)
     except Exception as e:
-        # Esto es lo que te salía como 500 antes
-        # ahora por lo menos te dice qué pasó
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"No se pudo marcar como leída: {e}",
@@ -92,15 +90,13 @@ async def create_test_notification(request: Request):
         "data": {"word": "hola"},
     }
 
-    # esto persiste + envía por websocket
     await process_notification(fake_msg)
-
     return {"ok": True}
 
 
 # =========================
 # 🔧 DEV-ONLY: /notifications/dev-send
-# Enviar una notificación arbitraria (persistencia + WS) para pruebas locales.
+# Enviar una notificación arbitraria (persistencia + WS) para pruebas.
 # Requiere JWT; si no se envía userId en el body, usa el del token (sub).
 # =========================
 
@@ -115,12 +111,12 @@ class DevSendIn(BaseModel):
 @router.post("/dev-send")
 async def dev_send(body: DevSendIn, request: Request):
     """
-    Envia una notificación arbitraria para el usuario indicado (o el del JWT si no se manda).
-    Útil para probar NEW_MESSAGE, WORD_UPDATED, etc.
+    Envía una notificación arbitraria para el usuario indicado
+    (o el del JWT si no se manda userId). Útil para probar
+    NEW_MESSAGE, WORD_UPDATED, WORD_FORGOTTEN, etc.
     """
     auth_header = request.headers.get("Authorization", "")
     current = get_current_user(auth_header)
-
     target_user = body.userId or current["sub"]
 
     msg = {
@@ -133,3 +129,19 @@ async def dev_send(body: DevSendIn, request: Request):
 
     await process_notification(msg)
     return {"ok": True, "echo": msg}
+
+
+# =========================
+# 🔎 Diagnóstico del consumer de Service Bus
+# =========================
+@router.get("/debug/consumer-status")
+async def debug_consumer_status():
+    """
+    Devuelve el estado del consumer de Service Bus:
+    - startedAt: cuándo arrancó
+    - lastMessageAt: último mensaje procesado
+    - lastError: último error visto (si hubo)
+    - queue: nombre de la cola
+    - hasConnectionString: si hay conn string configurado
+    """
+    return consumer_status()
