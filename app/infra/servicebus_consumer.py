@@ -2,81 +2,80 @@
 import os
 import json
 import asyncio
+from datetime import datetime, timezone
 
 from azure.servicebus.aio import ServiceBusClient
 from azure.servicebus import TransportType
 
 from app.services.notification_handler import process_notification
 
-# ====== env ======
 SB_CONN_STR = os.getenv("AZURE_SERVICE_BUS_CONNECTION_STRING")
 SB_QUEUE = os.getenv("AZURE_SERVICE_BUS_QUEUE_NAME", "notifications-queue")
 
+# ➕ ESTADO para diagnóstico
+CONSUMER_STARTED_AT = None
+LAST_SB_MSG_AT = None
+LAST_ERROR = None
+
+def _utcnow_iso():
+    return datetime.now(timezone.utc).isoformat()
 
 async def consume_notifications():
-    """
-    Consumer asíncrono de Azure Service Bus:
-      - AMQP sobre WebSocket (443) para funcionar en App Service.
-      - Lee mensajes de la cola y llama process_notification(payload).
-      - Confirma (complete) sólo si procesó OK.
-      - Reconecta con backoff si se cae.
-    """
+    """Consume mensajes reales desde Azure Service Bus (AMQP over WebSockets)."""
+    global CONSUMER_STARTED_AT, LAST_SB_MSG_AT, LAST_ERROR
+
     if not SB_CONN_STR:
-        print("⚠️  Falta AZURE_SERVICE_BUS_CONNECTION_STRING. No se consumirá la cola.")
+        print("⚠️  Service Bus no configurado. No se consumirá la cola.")
+        LAST_ERROR = "SB_CONN_STR missing"
         return
 
-    if not SB_QUEUE:
-        print("⚠️  Falta AZURE_SERVICE_BUS_QUEUE_NAME. No se consumirá la cola.")
-        return
+    CONSUMER_STARTED_AT = _utcnow_iso()
+    LAST_ERROR = None
+    print(f"✅ Conectando a Service Bus (cola: {SB_QUEUE}) usando WebSockets...")
 
-    backoff = 5  # segundos (puedes incrementar gradualmente si quieres)
+    servicebus_client = ServiceBusClient.from_connection_string(
+        conn_str=SB_CONN_STR,
+        transport_type=TransportType.AmqpOverWebsocket,
+    )
 
-    while True:
-        try:
-            print(f"[consumer] ⚙️ Conectando a Service Bus (cola: {SB_QUEUE}) con WebSockets 443…")
-            async with ServiceBusClient.from_connection_string(
-                SB_CONN_STR,
-                transport_type=TransportType.AmqpOverWebsocket,  # clave para 443
-            ) as sb_client:
-                receiver = sb_client.get_queue_receiver(
-                    queue_name=SB_QUEUE,
-                    max_wait_time=20,  # espera lote
-                )
-                async with receiver:
-                    print(f"[consumer] ✅ Escuchando cola: {SB_QUEUE}")
-                    while True:
-                        # recibe lote
-                        messages = await receiver.receive_messages(
-                            max_message_count=10,
-                            max_wait_time=10,
-                        )
-                        if not messages:
-                            await asyncio.sleep(0.5)
-                            continue
+    async with servicebus_client:
+        receiver = servicebus_client.get_queue_receiver(queue_name=SB_QUEUE)
+        async with receiver:
+            while True:
+                try:
+                    messages = await receiver.receive_messages(
+                        max_message_count=5,
+                        max_wait_time=5,
+                    )
+                    if not messages:
+                        await asyncio.sleep(1)
+                        continue
 
-                        for msg in messages:
-                            try:
-                                # >>> OJO: leer bytes del body <<<
-                                body_bytes = b"".join(part for part in msg.body)
-                                payload = json.loads(body_bytes.decode("utf-8"))
+                    for msg in messages:
+                        try:
+                            body = str(msg)
+                            data = json.loads(body)
+                            print("📩 Mensaje recibido de SB:", data)
 
-                                print("[consumer] 📥 Mensaje recibido:", payload)
+                            await process_notification(data)
+                            await receiver.complete_message(msg)
 
-                                # Persistir + WS
-                                await process_notification(payload)
+                            LAST_SB_MSG_AT = _utcnow_iso()
+                            LAST_ERROR = None
+                        except Exception as e:
+                            LAST_ERROR = f"process_error: {e}"
+                            print("❌ Error procesando mensaje:", e)
+                except Exception as e:
+                    LAST_ERROR = f"receive_error: {e}"
+                    print("⚠️  Error recibiendo de Service Bus, reintentando en 3s...", e)
+                    await asyncio.sleep(3)
 
-                                # Confirmar
-                                await receiver.complete_message(msg)
-                                print("[consumer] ✅ Mensaje completado")
-                            except Exception as e:
-                                # No completar => reintenta (o DLQ por MaxDeliveryCount)
-                                print("[consumer] ❗ Error procesando mensaje:", e)
-
-            # si sale del with sin error, pequeña pausa antes de reconectar
-            await asyncio.sleep(1)
-
-        except Exception as e:
-            print(f"[consumer] 🔁 Error de conexión, reintento en {backoff}s ->", e)
-            await asyncio.sleep(backoff)
-            # opcional: backoff = min(30, backoff * 2)
-
+def consumer_status():
+    """Devuelve un snapshot del estado del consumer."""
+    return {
+        "queue": SB_QUEUE,
+        "startedAt": CONSUMER_STARTED_AT,
+        "lastMessageAt": LAST_SB_MSG_AT,
+        "lastError": LAST_ERROR,
+        "hasConnectionString": bool(SB_CONN_STR),
+    }
