@@ -26,10 +26,6 @@ def _extract_body_as_str(msg) -> str:
     como string UTF-8.
     """
     try:
-        # En versiones recientes, msg.body suele ser:
-        #  - bytes
-        #  - list[bytes]
-        #  - str
         body = msg.body  # type: ignore[attr-defined]
 
         # bytes o bytearray
@@ -41,7 +37,6 @@ def _extract_body_as_str(msg) -> str:
             try:
                 return b"".join(body).decode("utf-8")
             except Exception:
-                # fallback: str() por si acaso
                 return "".join(str(part) for part in body)
 
         # ya es string
@@ -49,10 +44,9 @@ def _extract_body_as_str(msg) -> str:
             return body
 
     except Exception:
-        # fallback final
         pass
 
-    # ÚLTIMO recurso: str(msg)
+    # ÚLTIMO recurso
     return str(msg)
 
 async def consume_notifications():
@@ -91,8 +85,20 @@ async def consume_notifications():
                             raw_body = _extract_body_as_str(msg)
                             print("📨 RAW body recibido de SB:", raw_body)
 
-                            data = json.loads(raw_body)
-                            print("📩 Mensaje parseado de SB:", data)
+                            # 1) Primera decodificación
+                            parsed = json.loads(raw_body)
+
+                            # 2) Si TODAVÍA es string (caso "\"{...}\""), decodificamos otra vez
+                            if isinstance(parsed, str):
+                                parsed = json.loads(parsed)
+
+                            if not isinstance(parsed, dict):
+                                raise ValueError(
+                                    f"Mensaje de SB no es un dict tras parseo: {type(parsed)}"
+                                )
+
+                            data = parsed
+                            print("📩 Mensaje parseado de SB (dict):", data)
 
                             # Lógica de negocio: guarda en tabla + WS, etc.
                             await process_notification(data)
