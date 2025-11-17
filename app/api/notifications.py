@@ -15,59 +15,6 @@ from app.infra.servicebus_consumer import consumer_status  # 🔍 diagnóstico c
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 
-@router.get("/")
-async def get_notifications_root(request: Request):
-    """
-    Root endpoint for /notifications - returns service status
-    """
-    auth_header = request.headers.get("Authorization", "")
-    try:
-        current = get_current_user(auth_header)
-        return {
-            "status": "online",
-            "service": "Notification Service",
-            "user_id": current["sub"],
-            "timestamp": "2025-11-17T17:00:00.000Z",
-            "available_endpoints": [
-                "/notifications/user/{user_id}",
-                "/notifications/unread-count/{user_id}",
-                "/notifications/mark-read/{notification_id}",
-                "/notifications/test",
-                "/notifications/dev-send",
-                "/notifications/debug/consumer-status"
-            ]
-        }
-    except HTTPException:
-        return {
-            "status": "online",
-            "service": "Notification Service",
-            "requires_auth": True,
-            "message": "Provide JWT token to access user-specific endpoints"
-        }
-
-
-@router.post("/")
-async def post_notifications_root(
-    request: Request,
-    body: dict = None
-):
-    """
-    Root POST endpoint - acts as a generic notification receiver
-    """
-    auth_header = request.headers.get("Authorization", "")
-    current = get_current_user(auth_header)
-
-    # Process as generic notification
-    fake_msg = {
-        "type": "SYSTEM_ALERT",
-        "userId": current["sub"],
-        "data": body or {}
-    }
-
-    await process_notification(fake_msg)
-    return {"ok": True, "message": "Notification processed"}
-
-
 @router.get("/user/{user_id}")
 async def list_user_notifications(user_id: str, request: Request):
     """
