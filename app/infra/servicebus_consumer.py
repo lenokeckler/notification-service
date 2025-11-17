@@ -23,6 +23,35 @@ def is_local_development():
 def _utcnow_iso():
     return datetime.now(timezone.utc).isoformat()
 
+def _extract_body_as_str(msg) -> str:
+    """
+    Intenta extraer el body real del mensaje de Service Bus
+    como string UTF-8.
+    """
+    try:
+        body = msg.body  # type: ignore[attr-defined]
+
+        # bytes o bytearray
+        if isinstance(body, (bytes, bytearray)):
+            return body.decode("utf-8")
+
+        # lista de secciones binarias
+        if isinstance(body, list):
+            try:
+                return b"".join(body).decode("utf-8")
+            except Exception:
+                return "".join(str(part) for part in body)
+
+        # ya es string
+        if isinstance(body, str):
+            return body
+
+    except Exception:
+        pass
+
+    # ÚLTIMO recurso
+    return str(msg)
+
 async def consume_notifications():
     """Consume mensajes reales desde Azure Service Bus (AMQP over WebSockets)."""
     global CONSUMER_STARTED_AT, LAST_SB_MSG_AT, LAST_ERROR
@@ -64,10 +93,25 @@ async def consume_notifications():
 
                     for msg in messages:
                         try:
-                            body = str(msg)
-                            data = json.loads(body)
-                            print("📩 Mensaje recibido de SB:", data)
+                            raw_body = _extract_body_as_str(msg)
+                            print("📨 RAW body recibido de SB:", raw_body)
 
+                            # 1) Primera decodificación
+                            parsed = json.loads(raw_body)
+
+                            # 2) Si TODAVÍA es string (caso "\"{...}\""), decodificamos otra vez
+                            if isinstance(parsed, str):
+                                parsed = json.loads(parsed)
+
+                            if not isinstance(parsed, dict):
+                                raise ValueError(
+                                    f"Mensaje de SB no es un dict tras parseo: {type(parsed)}"
+                                )
+
+                            data = parsed
+                            print("📩 Mensaje parseado de SB (dict):", data)
+
+                            # Lógica de negocio: guarda en tabla + WS, etc.
                             await process_notification(data)
                             await receiver.complete_message(msg)
 
