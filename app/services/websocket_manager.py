@@ -1,7 +1,6 @@
 # app/services/websocket_manager.py
 from typing import Dict, Set
 from fastapi import WebSocket
-from datetime import datetime
 
 
 class WebSocketManager:
@@ -10,24 +9,13 @@ class WebSocketManager:
     user_id -> set(WebSocket)
     """
     def __init__(self):
-        # Use a more robust data structure
         self.active_connections: Dict[str, Set[WebSocket]] = {}
-        self.connection_metadata: Dict[str, dict] = {}
 
     async def connect(self, user_id: str, websocket: WebSocket):
         await websocket.accept()
         if user_id not in self.active_connections:
             self.active_connections[user_id] = set()
-            self.connection_metadata[user_id] = {}
-
         self.active_connections[user_id].add(websocket)
-
-        # Store connection metadata
-        self.connection_metadata[user_id][websocket] = {
-            "connected_at": datetime.utcnow().isoformat(),
-            "client_ip": websocket.client.host if websocket.client else "unknown"
-        }
-        print(f"✅ WebSocket connected for user {user_id}")
 
     def disconnect(self, user_id: str, websocket: WebSocket):
         if user_id in self.active_connections:
