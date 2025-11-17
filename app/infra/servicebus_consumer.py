@@ -17,12 +17,23 @@ CONSUMER_STARTED_AT = None
 LAST_SB_MSG_AT = None
 LAST_ERROR = None
 
+def is_local_development():
+    return os.getenv("NODE_ENV") == "development" or os.getenv("SKIP_MTLS") == "true"
+
 def _utcnow_iso():
     return datetime.now(timezone.utc).isoformat()
 
 async def consume_notifications():
     """Consume mensajes reales desde Azure Service Bus (AMQP over WebSockets)."""
     global CONSUMER_STARTED_AT, LAST_SB_MSG_AT, LAST_ERROR
+
+    # Skip if no connection string or in local simulation mode
+    if not SB_CONN_STR or is_local_development():
+        print("⚠️  Service Bus consumer disabled (local development mode)")
+        CONSUMER_STARTED_AT = None
+        LAST_SB_MSG_AT = None
+        LAST_ERROR = "Local development mode - consumer disabled"
+        return
 
     if not SB_CONN_STR:
         print("⚠️  Service Bus no configurado. No se consumirá la cola.")
